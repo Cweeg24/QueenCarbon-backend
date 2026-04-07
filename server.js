@@ -38,22 +38,23 @@ mqttClient.on("message", async (topic, message) => {
   if (topic.includes("comando") || !collection) return;
 
   const valor = parseFloat(message.toString());
+  
+  // AQUI ESTÁ A MUDANÇA: Extração segura
   const partes = topic.split("/");
-
-  // SEGURANÇA: Só prossegue se o tópico tiver pelo menos 2 partes (tanque/sensor)
+  
   if (partes.length >= 2 && !isNaN(valor)) {
-    // PEGANDO OS ITENS DA LISTA PELO ÍNDICE e
-    const tanque = partes.trim(); 
-    const sensor = partes.trim();
+    // Pegamos os textos PRIMEIRO, e só depois limpamos os espaços
+    const nomeTanque = String(partes).trim();
+    const nomeSensor = String(partes).trim();
 
     try {
       await collection.insertOne({ 
-        tanque: tanque, 
-        sensor: sensor, 
+        tanque: nomeTanque, 
+        sensor: nomeSensor, 
         valor: valor, 
         data: new Date() 
       });
-      console.log(`💾 DB -> [${tanque}] ${sensor}: ${valor}`);
+      console.log(`💾 [${nomeTanque}] ${nomeSensor}: ${valor}`);
     } catch (e) {
       console.error("Erro ao inserir:", e);
     }
@@ -61,12 +62,12 @@ mqttClient.on("message", async (topic, message) => {
 });
 
 // ==========================================
-// ROTAS
+// ROTAS DA API
 // ==========================================
 
 app.get("/api/ping", (req, res) => res.send("Servidor Queen Carbon Online! 🚀"));
 
-// Rota de Debug para ver os dados brutos no banco
+// Rota de Debug para ver o que tem no banco
 app.get("/api/debug/db", async (req, res) => {
   if (!collection) return res.send("Banco não conectado");
   const dados = await collection.find({}).sort({ data: -1 }).limit(10).toArray();
@@ -77,7 +78,7 @@ app.get("/api/debug/db", async (req, res) => {
 app.get("/api/status/:tanque", async (req, res) => {
   if (!collection) return res.status(503).json({ erro: "Banco ainda conectando..." });
   
-  const tanqueId = req.params.tanque.trim();
+  const tanqueId = String(req.params.tanque).trim();
   const sensores = ['temperatura_externa', 'umidade_ar', 'nivel', 'luminosidade'];
   const resposta = {};
   
@@ -102,7 +103,7 @@ app.get("/api/historico/:tanque", async (req, res) => {
   if (!collection) return res.status(503).json({ erro: "Banco ainda conectando..." });
   try {
     const dados = await collection
-      .find({ tanque: req.params.tanque.trim() })
+      .find({ tanque: String(req.params.tanque).trim() })
       .sort({ data: -1 })
       .limit(40)
       .toArray();
@@ -112,11 +113,11 @@ app.get("/api/historico/:tanque", async (req, res) => {
   }
 });
 
-// Rota de Comando (Controle do App)
+// Rota de Comando (Relés)
 app.post("/api/comando/:tanque", (req, res) => {
   const { dispositivo, estado } = req.body;
   const topico = `${req.params.tanque}/comando/${dispositivo}`;
-  mqttClient.publish(topico, estado.toString(), { qos: 1 });
+  mqttClient.publish(topico, String(estado), { qos: 1 });
   console.log(`📤 Comando: ${topico} -> ${estado}`);
   res.json({ status: "ok" });
 });
