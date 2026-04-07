@@ -34,18 +34,15 @@ mqttClient.on("connect", () => {
 });
 
 mqttClient.on("message", async (topic, message) => {
-  // Ignora se for comando ou se o banco não estiver pronto
   if (topic.includes("comando") || !collection) return;
 
   const valor = parseFloat(message.toString());
-  
-  // AQUI ESTÁ A MUDANÇA: Extração segura
-  const partes = topic.split("/");
-  
+  const partes = String(topic).split("/"); // Força o tópico a ser String antes do split
+
   if (partes.length >= 2 && !isNaN(valor)) {
-    // Pegamos os textos PRIMEIRO, e só depois limpamos os espaços
-    const nomeTanque = String(partes).trim();
-    const nomeSensor = String(partes).trim();
+    // AQUI ESTÁ A CORREÇÃO: Pegamos os índices e corretamente
+    const nomeTanque = partes.trim().toLowerCase();
+    const nomeSensor = partes.trim().toLowerCase();
 
     try {
       await collection.insertOne({ 
@@ -54,7 +51,7 @@ mqttClient.on("message", async (topic, message) => {
         valor: valor, 
         data: new Date() 
       });
-      console.log(`💾 [${nomeTanque}] ${nomeSensor}: ${valor}`);
+      console.log(`💾 SALVO -> [${nomeTanque}] ${nomeSensor}: ${valor}`);
     } catch (e) {
       console.error("Erro ao inserir:", e);
     }
@@ -62,23 +59,20 @@ mqttClient.on("message", async (topic, message) => {
 });
 
 // ==========================================
-// ROTAS DA API
+// ROTAS DE OPERAÇÃO E LIMPEZA
 // ==========================================
 
-app.get("/api/ping", (req, res) => res.send("Servidor Queen Carbon Online! 🚀"));
-
-// Rota de Debug para ver o que tem no banco
-app.get("/api/debug/db", async (req, res) => {
+// ROTA FAXINA: ESSENCIAL PARA APAGAR OS DADOS "SUJOS" COM VÍRGULA
+app.get("/api/limpar", async (req, res) => {
   if (!collection) return res.send("Banco não conectado");
-  const dados = await collection.find({}).sort({ data: -1 }).limit(10).toArray();
-  res.json(dados);
+  await collection.deleteMany({});
+  res.send("<h1>Banco Limpo! 🧹</h1><p>Os dados antigos foram apagados. Reinicie a ESP32.</p>");
 });
 
-// Rota de Status (Monitoramento do App)
 app.get("/api/status/:tanque", async (req, res) => {
   if (!collection) return res.status(503).json({ erro: "Banco ainda conectando..." });
   
-  const tanqueId = String(req.params.tanque).trim();
+  const tanqueId = String(req.params.tanque).trim().toLowerCase();
   const sensores = ['temperatura_externa', 'umidade_ar', 'nivel', 'luminosidade'];
   const resposta = {};
   
@@ -98,28 +92,18 @@ app.get("/api/status/:tanque", async (req, res) => {
   }
 });
 
-// Rota de Histórico
-app.get("/api/historico/:tanque", async (req, res) => {
-  if (!collection) return res.status(503).json({ erro: "Banco ainda conectando..." });
-  try {
-    const dados = await collection
-      .find({ tanque: String(req.params.tanque).trim() })
-      .sort({ data: -1 })
-      .limit(40)
-      .toArray();
-    res.json(dados.reverse());
-  } catch (err) {
-    res.status(500).json({ erro: "Erro ao buscar histórico" });
-  }
-});
-
-// Rota de Comando (Relés)
 app.post("/api/comando/:tanque", (req, res) => {
   const { dispositivo, estado } = req.body;
   const topico = `${req.params.tanque}/comando/${dispositivo}`;
   mqttClient.publish(topico, String(estado), { qos: 1 });
-  console.log(`📤 Comando: ${topico} -> ${estado}`);
   res.json({ status: "ok" });
+});
+
+// Rota de Debug para conferir se os novos dados estão vindo certos
+app.get("/api/debug/db", async (req, res) => {
+  if (!collection) return res.send("Banco não conectado");
+  const dados = await collection.find({}).sort({ data: -1 }).limit(10).toArray();
+  res.json(dados);
 });
 
 app.listen(PORT, () => console.log(`🚀 Online na porta ${PORT}`));
