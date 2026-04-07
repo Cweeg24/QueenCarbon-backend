@@ -37,12 +37,15 @@ mqttClient.on("message", async (topic, message) => {
   if (topic.includes("comando") || !collection) return;
 
   const valor = parseFloat(message.toString());
-  const partes = String(topic).split("/"); // Força o tópico a ser String antes do split
+  const stringTopico = String(topic); // Garante que o tópico é texto
+  
+  // AQUI ESTÁ A MUDANÇA SEGURA:
+  const [primeiraParte, segundaParte] = stringTopico.split("/");
 
-  if (partes.length >= 2 && !isNaN(valor)) {
-    // AQUI ESTÁ A CORREÇÃO: Pegamos os índices e corretamente
-    const nomeTanque = partes.trim().toLowerCase();
-    const nomeSensor = partes.trim().toLowerCase();
+  if (primeiraParte && segundaParte && !isNaN(valor)) {
+    // Agora limpamos os textos individualmente
+    const nomeTanque = primeiraParte.trim().toLowerCase();
+    const nomeSensor = segundaParte.trim().toLowerCase();
 
     try {
       await collection.insertOne({ 
@@ -51,7 +54,7 @@ mqttClient.on("message", async (topic, message) => {
         valor: valor, 
         data: new Date() 
       });
-      console.log(`💾 SALVO -> [${nomeTanque}] ${nomeSensor}: ${valor}`);
+      console.log(`💾 DB -> [${nomeTanque}] ${nomeSensor}: ${valor}`);
     } catch (e) {
       console.error("Erro ao inserir:", e);
     }
@@ -59,36 +62,30 @@ mqttClient.on("message", async (topic, message) => {
 });
 
 // ==========================================
-// ROTAS DE OPERAÇÃO E LIMPEZA
+// ROTAS
 // ==========================================
 
-// ROTA FAXINA: ESSENCIAL PARA APAGAR OS DADOS "SUJOS" COM VÍRGULA
+app.get("/api/ping", (req, res) => res.send("Servidor Online! 🚀"));
+
 app.get("/api/limpar", async (req, res) => {
   if (!collection) return res.send("Banco não conectado");
   await collection.deleteMany({});
-  res.send("<h1>Banco Limpo! 🧹</h1><p>Os dados antigos foram apagados. Reinicie a ESP32.</p>");
+  res.send("<h1>Banco Limpo! 🧹</h1>");
 });
 
 app.get("/api/status/:tanque", async (req, res) => {
   if (!collection) return res.status(503).json({ erro: "Banco ainda conectando..." });
-  
-  const tanqueId = String(req.params.tanque).trim().toLowerCase();
+  const tId = String(req.params.tanque).trim().toLowerCase();
   const sensores = ['temperatura_externa', 'umidade_ar', 'nivel', 'luminosidade'];
   const resposta = {};
-  
   try {
     for (let s of sensores) {
-      const ultimo = await collection
-        .find({ tanque: tanqueId, sensor: s })
-        .sort({ data: -1 })
-        .limit(1)
-        .toArray();
-      
+      const ultimo = await collection.find({ tanque: tId, sensor: s }).sort({ data: -1 }).limit(1).toArray();
       resposta[s] = ultimo.length > 0 ? ultimo.valor : 0;
     }
     res.json(resposta);
   } catch (err) {
-    res.status(500).json({ erro: "Erro ao buscar dados" });
+    res.status(500).json({ erro: "Erro ao buscar" });
   }
 });
 
@@ -97,13 +94,6 @@ app.post("/api/comando/:tanque", (req, res) => {
   const topico = `${req.params.tanque}/comando/${dispositivo}`;
   mqttClient.publish(topico, String(estado), { qos: 1 });
   res.json({ status: "ok" });
-});
-
-// Rota de Debug para conferir se os novos dados estão vindo certos
-app.get("/api/debug/db", async (req, res) => {
-  if (!collection) return res.send("Banco não conectado");
-  const dados = await collection.find({}).sort({ data: -1 }).limit(10).toArray();
-  res.json(dados);
 });
 
 app.listen(PORT, () => console.log(`🚀 Online na porta ${PORT}`));
