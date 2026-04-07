@@ -5,14 +5,12 @@ const { MongoClient } = require("mongodb");
 const mqtt = require("mqtt");
 
 const app = express();
+
+// Configuração de CORS para permitir que o App fale com o Servidor sem bloqueios
 app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-
-// ==========================================
-// 1. CONFIGURAÇÃO DO MONGODB
-// ==========================================
 const mongoClient = new MongoClient(process.env.MONGO_URI);
 let collection;
 
@@ -20,13 +18,9 @@ async function iniciarServidor() {
   try {
     await mongoClient.connect();
     console.log("✅ Conectado ao MongoDB Atlas!");
-    
     const db = mongoClient.db("queencarbon");
     collection = db.collection("sensores");
 
-    // ==========================================
-    // 2. CONFIGURAÇÃO DO MQTT (HIVEMQ)
-    // ==========================================
     const mqttClient = mqtt.connect({
       host: process.env.MQTT_HOST,
       port: 8883,
@@ -37,89 +31,61 @@ async function iniciarServidor() {
 
     mqttClient.on("connect", () => {
       console.log("✅ Conectado ao HiveMQ!");
-      mqttClient.subscribe("tanque1/#"); 
+      mqttClient.subscribe("tanque1/#");
+      mqttClient.subscribe("tanque2/#");
     });
 
     mqttClient.on("message", async (topic, message) => {
-      const msgCrua = message.toString();
-      const valor = parseFloat(msgCrua);
-
+      if (topic.includes("comando")) return;
+      const valor = parseFloat(message.toString());
       const partes = topic.split("/");
       const tanque = partes;
       const sensor = partes;
-
       if (!isNaN(valor)) {
-        await collection.insertOne({
-          tanque: tanque,
-          sensor: sensor,
-          valor: valor,
-          data: new Date(),
-        });
-        console.log(`💾 Salvo -> ${sensor}: ${valor}`);
+        await collection.insertOne({ tanque, sensor, valor, data: new Date() });
       }
     });
 
-    // ==========================================
-    // 3. API PARA O APLICATIVO EXPO (ROTAS)
-    // ==========================================
-    
-    // ROTA ATUAL: Pega o último valor (Para os ponteiros/cards)
+    // --- ROTAS ---
+
     app.get("/api/status/:tanque", async (req, res) => {
-      try {
-        const tanqueId = req.params.tanque;
-        const sensores = ['temperatura_externa', 'umidade_ar', 'nivel', 'luminosidade'];
-        const resposta = {};
-
-        for (let s of sensores) {
-          const ultimoDado = await collection
-            .find({ tanque: tanqueId, sensor: s })
-            .sort({ data: -1 })
-            .limit(1)
-            .toArray();
-
-          resposta[s] = ultimoDado.length > 0 ? ultimoDado.valor : 0;
-        }
-        res.json(resposta);
-      } catch (e) {
-        res.status(500).json({ erro: "Erro ao buscar status" });
+      const sensores = ['temperatura_externa', 'umidade_ar', 'nivel', 'luminosidade'];
+      const resposta = {};
+      for (let s of sensores) {
+        const ultimo = await collection.find({ tanque: req.params.tanque, sensor: s }).sort({ data: -1 }).limit(1).toArray();
+        resposta[s] = ultimo.length > 0 ? ultimo.valor : 0;
       }
+      res.json(resposta);
     });
 
-    // --- NOVA ROTA: HISTÓRICO (Para o Gráfico) ---
     app.get("/api/historico/:tanque", async (req, res) => {
-      try {
-        const tanqueId = req.params.tanque;
-
-        // Busca os últimos 40 registros gerais do tanque
-        const dadosBrutos = await collection
-          .find({ tanque: tanqueId })
-          .sort({ data: -1 })
-          .limit(40)
-          .toArray();
-
-        // Mapeia os dados para o formato que o gráfico entende
-        // Ex: { temperatura_externa: 25, timestamp: "2024-..." }
-        const historicoFormatado = dadosBrutos.map(d => ({
-          [d.sensor]: d.valor, // Cria a chave com o nome do sensor (ex: temperatura_externa)
-          timestamp: d.data,
-          sensor: d.sensor     // mantemos essa chave para o filtro do App
-        }));
-
-        // Invertemos para que o gráfico mostre do mais antigo para o mais novo
-        res.json(historicoFormatado.reverse());
-      } catch (e) {
-        console.error("Erro na rota de histórico:", e);
-        res.status(500).json({ erro: "Erro ao buscar histórico" });
-      }
+      const dados = await collection.find({ tanque: req.params.tanque }).sort({ data: -1 }).limit(40).toArray();
+      res.json(dados.reverse());
     });
 
-    app.listen(PORT, () => {
-      console.log(`🚀 API do Queen Carbon rodando na porta ${PORT}`);
+    // ROTA DE COMANDO (POST - Para o Aplicativo)
+    app.post("/api/comando/:tanque", (req, res) => {
+      const { dispositivo, estado } = req.body;
+      const topico = `${req.params.tanque}/comando/${dispositivo}`;
+      mqttClient.publish(topico, estado.toString(), { qos: 1 });
+      console.log(`📤 [POST] Comando: ${topico} -> ${estado}`);
+      res.json({ status: "ok", enviado: topico });
     });
+
+    // --- ROTA DE TESTE (GET - Para você testar no Navegador) ---
+    // Digite no navegador: .../api/teste/tanque1/luz/1
+    app.get("/api/teste/:tanque/:dispositivo/:estado", (req, res) => {
+      const { tanque, dispositivo, estado } = req.params;
+      const topico = `${tanque}/comando/${dispositivo}`;
+      mqttClient.publish(topico, estado.toString(), { qos: 1 });
+      console.log(`📤 [GET TESTE] Comando: ${topico} -> ${estado}`);
+      res.send(`<h1>Comando Enviado!</h1><p>Tópico: ${topico}</p><p>Estado: ${estado}</p>`);
+    });
+
+    app.listen(PORT, () => console.log(`🚀 API Queen Carbon na porta ${PORT}`));
 
   } catch (error) {
-    console.error("❌ Erro fatal ao iniciar o servidor:", error);
+    console.error("❌ Erro fatal:", error);
   }
 }
-
 iniciarServidor();
