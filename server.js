@@ -42,7 +42,8 @@ mqttClient.on("message", async (topic, message) => {
 
   // SEGURANÇA: Só prossegue se o tópico tiver pelo menos 2 partes (tanque/sensor)
   if (partes.length >= 2 && !isNaN(valor)) {
-    const tanque = partes.trim(); // Trim agora no lugar certo (na string dentro da lista)
+    // PEGANDO OS ITENS DA LISTA PELO ÍNDICE e
+    const tanque = partes.trim(); 
     const sensor = partes.trim();
 
     try {
@@ -65,7 +66,7 @@ mqttClient.on("message", async (topic, message) => {
 
 app.get("/api/ping", (req, res) => res.send("Servidor Queen Carbon Online! 🚀"));
 
-// Rota de Debug para ver se o dado está entrando limpo
+// Rota de Debug para ver os dados brutos no banco
 app.get("/api/debug/db", async (req, res) => {
   if (!collection) return res.send("Banco não conectado");
   const dados = await collection.find({}).sort({ data: -1 }).limit(10).toArray();
@@ -120,4 +121,4 @@ app.post("/api/comando/:tanque", (req, res) => {
   res.json({ status: "ok" });
 });
 
-app.listen(PORT, () => console.log(`🚀 Porta: ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Online na porta ${PORT}`));
