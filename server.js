@@ -12,14 +12,13 @@ const PORT = process.env.PORT || 3000;
 const mongoClient = new MongoClient(process.env.MONGO_URI);
 let collection;
 
-// --- 1. CONEXÃO MONGODB ---
+// 1. CONEXÃO MONGODB
 mongoClient.connect().then(() => {
   console.log("✅ Conectado ao MongoDB!");
-  const db = mongoClient.db("queencarbon");
-  collection = db.collection("sensores");
+  collection = mongoClient.db("queencarbon").collection("sensores");
 }).catch(err => console.error("❌ Erro Mongo:", err));
 
-// --- 2. CONFIGURAÇÃO MQTT ---
+// 2. CONFIGURAÇÃO MQTT
 const mqttClient = mqtt.connect({
   host: process.env.MQTT_HOST,
   port: 8883,
@@ -38,36 +37,42 @@ mqttClient.on("message", async (topic, message) => {
   if (topic.includes("comando") || !collection) return;
 
   const valor = parseFloat(message.toString());
-  
-  // CORREÇÃO AQUI: Garantindo que o split funcione independente de como o tópico venha
+  // Divide o tópico e limpa qualquer espaço ou caractere invisível
   const partes = topic.split("/");
-  const tanque = partes; 
-  const sensor = partes;
+  const tanque = partes.trim();
+  const sensor = partes.trim();
 
   if (!isNaN(valor) && sensor) {
     try {
       await collection.insertOne({ 
-        tanque: tanque, // Agora vai salvar apenas "tanque1"
-        sensor: sensor, // Agora vai salvar apenas "temperatura_externa"
+        tanque: tanque, 
+        sensor: sensor, 
         valor: valor, 
         data: new Date() 
       });
-      console.log(`💾 Salvo -> Tanque: ${tanque} | Sensor: ${sensor} | Valor: ${valor}`);
+      console.log(`💾 SALVO NO DB -> Tanque: [${tanque}] | Sensor: [${sensor}] | Valor: ${valor}`);
     } catch (e) {
-      console.error("Erro ao salvar:", e);
+      console.error("Erro ao inserir:", e);
     }
   }
 });
 
-// --- 3. ROTAS ---
+// ==========================================
+// ROTAS DE DIAGNÓSTICO E USO
+// ==========================================
 
-app.get("/api/ping", (req, res) => res.send("Servidor Queen Carbon Online! 🚀"));
+// ROTA DE DEBUG: Mostra os últimos 10 itens salvos no banco (SEM FILTRO)
+app.get("/api/debug/db", async (req, res) => {
+  if (!collection) return res.send("Banco não conectado");
+  const dados = await collection.find({}).sort({ data: -1 }).limit(10).toArray();
+  res.json(dados);
+});
 
 // Rota de Status (Monitoramento)
 app.get("/api/status/:tanque", async (req, res) => {
   if (!collection) return res.status(503).json({ erro: "Banco ainda conectando..." });
   
-  const tanqueId = req.params.tanque;
+  const tanqueId = req.params.tanque.trim();
   const sensores = ['temperatura_externa', 'umidade_ar', 'nivel', 'luminosidade'];
   const resposta = {};
   
@@ -81,28 +86,13 @@ app.get("/api/status/:tanque", async (req, res) => {
       
       resposta[s] = ultimo.length > 0 ? ultimo.valor : 0;
     }
+    // Se o objeto resposta estiver todo zerado, avisamos
     res.json(resposta);
   } catch (err) {
     res.status(500).json({ erro: "Erro ao buscar dados" });
   }
 });
 
-// Rota de Histórico
-app.get("/api/historico/:tanque", async (req, res) => {
-  if (!collection) return res.status(503).json({ erro: "Banco ainda conectando..." });
-  try {
-    const dados = await collection
-      .find({ tanque: req.params.tanque })
-      .sort({ data: -1 })
-      .limit(40)
-      .toArray();
-    res.json(dados.reverse());
-  } catch (err) {
-    res.status(500).json({ erro: "Erro ao buscar histórico" });
-  }
-});
-
-// Rota de Comando
 app.post("/api/comando/:tanque", (req, res) => {
   const { dispositivo, estado } = req.body;
   const topico = `${req.params.tanque}/comando/${dispositivo}`;
@@ -110,4 +100,4 @@ app.post("/api/comando/:tanque", (req, res) => {
   res.json({ status: "ok", enviado: topico });
 });
 
-app.listen(PORT, () => console.log(`🚀 API na porta ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Online na porta ${PORT}`));
