@@ -34,15 +34,17 @@ mqttClient.on("connect", () => {
 });
 
 mqttClient.on("message", async (topic, message) => {
+  // Ignora se for comando ou se o banco não estiver pronto
   if (topic.includes("comando") || !collection) return;
 
   const valor = parseFloat(message.toString());
-  // Divide o tópico e limpa qualquer espaço ou caractere invisível
   const partes = topic.split("/");
-  const tanque = partes.trim();
-  const sensor = partes.trim();
 
-  if (!isNaN(valor) && sensor) {
+  // SEGURANÇA: Só prossegue se o tópico tiver pelo menos 2 partes (tanque/sensor)
+  if (partes.length >= 2 && !isNaN(valor)) {
+    const tanque = partes.trim(); // Trim agora no lugar certo (na string dentro da lista)
+    const sensor = partes.trim();
+
     try {
       await collection.insertOne({ 
         tanque: tanque, 
@@ -50,7 +52,7 @@ mqttClient.on("message", async (topic, message) => {
         valor: valor, 
         data: new Date() 
       });
-      console.log(`💾 SALVO NO DB -> Tanque: [${tanque}] | Sensor: [${sensor}] | Valor: ${valor}`);
+      console.log(`💾 DB -> [${tanque}] ${sensor}: ${valor}`);
     } catch (e) {
       console.error("Erro ao inserir:", e);
     }
@@ -58,17 +60,19 @@ mqttClient.on("message", async (topic, message) => {
 });
 
 // ==========================================
-// ROTAS DE DIAGNÓSTICO E USO
+// ROTAS
 // ==========================================
 
-// ROTA DE DEBUG: Mostra os últimos 10 itens salvos no banco (SEM FILTRO)
+app.get("/api/ping", (req, res) => res.send("Servidor Queen Carbon Online! 🚀"));
+
+// Rota de Debug para ver se o dado está entrando limpo
 app.get("/api/debug/db", async (req, res) => {
   if (!collection) return res.send("Banco não conectado");
   const dados = await collection.find({}).sort({ data: -1 }).limit(10).toArray();
   res.json(dados);
 });
 
-// Rota de Status (Monitoramento)
+// Rota de Status (Monitoramento do App)
 app.get("/api/status/:tanque", async (req, res) => {
   if (!collection) return res.status(503).json({ erro: "Banco ainda conectando..." });
   
@@ -86,18 +90,34 @@ app.get("/api/status/:tanque", async (req, res) => {
       
       resposta[s] = ultimo.length > 0 ? ultimo.valor : 0;
     }
-    // Se o objeto resposta estiver todo zerado, avisamos
     res.json(resposta);
   } catch (err) {
     res.status(500).json({ erro: "Erro ao buscar dados" });
   }
 });
 
+// Rota de Histórico
+app.get("/api/historico/:tanque", async (req, res) => {
+  if (!collection) return res.status(503).json({ erro: "Banco ainda conectando..." });
+  try {
+    const dados = await collection
+      .find({ tanque: req.params.tanque.trim() })
+      .sort({ data: -1 })
+      .limit(40)
+      .toArray();
+    res.json(dados.reverse());
+  } catch (err) {
+    res.status(500).json({ erro: "Erro ao buscar histórico" });
+  }
+});
+
+// Rota de Comando (Controle do App)
 app.post("/api/comando/:tanque", (req, res) => {
   const { dispositivo, estado } = req.body;
   const topico = `${req.params.tanque}/comando/${dispositivo}`;
   mqttClient.publish(topico, estado.toString(), { qos: 1 });
-  res.json({ status: "ok", enviado: topico });
+  console.log(`📤 Comando: ${topico} -> ${estado}`);
+  res.json({ status: "ok" });
 });
 
-app.listen(PORT, () => console.log(`🚀 Online na porta ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Porta: ${PORT}`));
