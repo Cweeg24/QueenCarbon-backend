@@ -12,14 +12,14 @@ const PORT = process.env.PORT || 3000;
 const mongoClient = new MongoClient(process.env.MONGO_URI);
 let collection;
 
-// --- 1. CONEXÃO COM O BANCO ---
+// --- 1. CONEXÃO MONGODB ---
 mongoClient.connect().then(() => {
   console.log("✅ Conectado ao MongoDB!");
   const db = mongoClient.db("queencarbon");
   collection = db.collection("sensores");
 }).catch(err => console.error("❌ Erro Mongo:", err));
 
-// --- 2. CONFIGURAÇÃO MQTT (AQUI ESTAVA O PROBLEMA) ---
+// --- 2. CONFIGURAÇÃO MQTT ---
 const mqttClient = mqtt.connect({
   host: process.env.MQTT_HOST,
   port: 8883,
@@ -30,37 +30,36 @@ const mqttClient = mqtt.connect({
 
 mqttClient.on("connect", () => {
   console.log("✅ Conectado ao HiveMQ!");
-  // ESSENCIAIS: Sem essas linhas, o servidor não recebe os sensores!
   mqttClient.subscribe("tanque1/#");
   mqttClient.subscribe("tanque2/#");
 });
 
 mqttClient.on("message", async (topic, message) => {
-  // Se for comando, não salva no banco de dados
   if (topic.includes("comando") || !collection) return;
 
   const valor = parseFloat(message.toString());
+  
+  // CORREÇÃO AQUI: Garantindo que o split funcione independente de como o tópico venha
   const partes = topic.split("/");
-  const tanque = partes;
+  const tanque = partes; 
   const sensor = partes;
 
-  if (!isNaN(valor)) {
+  if (!isNaN(valor) && sensor) {
     try {
       await collection.insertOne({ 
-        tanque, 
-        sensor, 
-        valor, 
+        tanque: tanque, // Agora vai salvar apenas "tanque1"
+        sensor: sensor, // Agora vai salvar apenas "temperatura_externa"
+        valor: valor, 
         data: new Date() 
       });
-      // Log para você ver no painel do Render se os dados estão chegando
-      console.log(`💾 Recebido [${tanque}]: ${sensor} = ${valor}`);
+      console.log(`💾 Salvo -> Tanque: ${tanque} | Sensor: ${sensor} | Valor: ${valor}`);
     } catch (e) {
-      console.error("Erro ao salvar no banco:", e);
+      console.error("Erro ao salvar:", e);
     }
   }
 });
 
-// --- 3. ROTAS DA API ---
+// --- 3. ROTAS ---
 
 app.get("/api/ping", (req, res) => res.send("Servidor Queen Carbon Online! 🚀"));
 
@@ -68,13 +67,14 @@ app.get("/api/ping", (req, res) => res.send("Servidor Queen Carbon Online! 🚀"
 app.get("/api/status/:tanque", async (req, res) => {
   if (!collection) return res.status(503).json({ erro: "Banco ainda conectando..." });
   
+  const tanqueId = req.params.tanque;
   const sensores = ['temperatura_externa', 'umidade_ar', 'nivel', 'luminosidade'];
   const resposta = {};
   
   try {
     for (let s of sensores) {
       const ultimo = await collection
-        .find({ tanque: req.params.tanque, sensor: s })
+        .find({ tanque: tanqueId, sensor: s })
         .sort({ data: -1 })
         .limit(1)
         .toArray();
@@ -87,7 +87,7 @@ app.get("/api/status/:tanque", async (req, res) => {
   }
 });
 
-// Rota de Histórico (Gráfico)
+// Rota de Histórico
 app.get("/api/historico/:tanque", async (req, res) => {
   if (!collection) return res.status(503).json({ erro: "Banco ainda conectando..." });
   try {
@@ -102,13 +102,12 @@ app.get("/api/historico/:tanque", async (req, res) => {
   }
 });
 
-// Rota de Comando (Controle)
+// Rota de Comando
 app.post("/api/comando/:tanque", (req, res) => {
   const { dispositivo, estado } = req.body;
   const topico = `${req.params.tanque}/comando/${dispositivo}`;
   mqttClient.publish(topico, estado.toString(), { qos: 1 });
-  console.log(`📤 Comando: ${topico} -> ${estado}`);
   res.json({ status: "ok", enviado: topico });
 });
 
-app.listen(PORT, () => console.log(`🚀 API Queen Carbon na porta ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 API na porta ${PORT}`));
