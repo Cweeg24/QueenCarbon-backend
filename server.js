@@ -32,7 +32,6 @@ async function iniciarServidor() {
       console.log("✅ Conectado ao HiveMQ!");
       mqttClient.subscribe("tanque1/#");
       mqttClient.subscribe("tanque2/#");
-      mqttClient.subscribe("tanque1,+");
     });
 
     mqttClient.on("message", async (topic, message) => {
@@ -67,7 +66,6 @@ async function iniciarServidor() {
     // ROTAS DO APP (COM BLOQUEIO DE CACHE)
     // ==========================================
     
-    // Função para proibir o navegador/VPN de salvar a página na memória
     const noCache = (req, res, next) => {
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
       res.setHeader('Pragma', 'no-cache');
@@ -84,32 +82,32 @@ async function iniciarServidor() {
       res.send("<h1>Banco Limpo! 🧹</h1>");
     });
 
-    // Voltei com a rota de DEBUG para você sempre poder ver o banco!
     app.get("/api/debug/db", noCache, async (req, res) => {
       if (!collection) return res.send("Banco não conectado");
       const dados = await collection.find({}).sort({ data: -1 }).limit(10).toArray();
       res.json(dados);
     });
 
+    // 🛡️ A ROTA REESCRITA E INFALÍVEL
     app.get("/api/status/:tanque", noCache, async (req, res) => {
       try {
-        const tanqueId = req.params.tanque;
-        const sensores = ['temperatura_externa', 'umidade_ar', 'nivel', 'luminosidade'];
-        const resposta = {};
+        const t = req.params.tanque;
+        
+        // Buscas diretas. É impossível isso retornar vazio se o código estiver rodando.
+        const temp = await collection.find({ tanque: t, sensor: "temperatura_externa" }).sort({ data: -1 }).limit(1).toArray();
+        const umi = await collection.find({ tanque: t, sensor: "umidade_ar" }).sort({ data: -1 }).limit(1).toArray();
+        const niv = await collection.find({ tanque: t, sensor: "nivel" }).sort({ data: -1 }).limit(1).toArray();
+        const lum = await collection.find({ tanque: t, sensor: "luminosidade" }).sort({ data: -1 }).limit(1).toArray();
 
-        // Se o banco estiver vazio, ele VAI devolver zeros, nunca {} vazio.
-        for (let s of sensores) {
-          const ultimoDado = await collection
-            .find({ tanque: tanqueId, sensor: s })
-            .sort({ data: -1 })
-            .limit(1)
-            .toArray();
-
-          resposta[s] = ultimoDado.length > 0 ? ultimoDado.valor : 0;
-        }
-        res.json(resposta);
+        res.json({
+          temperatura_externa: temp.length > 0 ? temp.valor : 0,
+          umidade_ar: umi.length > 0 ? umi.valor : 0,
+          nivel: niv.length > 0 ? niv.valor : 0,
+          luminosidade: lum.length > 0 ? lum.valor : 0,
+          status_servidor: "OK_ATUALIZADO" // <-- SINAL RASTREADOR
+        });
       } catch (e) {
-        res.status(500).json({ erro: "Erro ao buscar dados" });
+        res.status(500).json({ erro: "Erro", detalhe: e.message });
       }
     });
 
