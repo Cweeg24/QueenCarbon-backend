@@ -20,9 +20,6 @@ async function iniciarServidor() {
     const db = mongoClient.db("queencarbon");
     collection = db.collection("sensores");
 
-    // ==========================================
-    // 2. CONFIGURAÇÃO DO MQTT (HIVEMQ)
-    // ==========================================
     const mqttClient = mqtt.connect({
       host: process.env.MQTT_HOST,
       port: 8883,
@@ -35,43 +32,55 @@ async function iniciarServidor() {
       console.log("✅ Conectado ao HiveMQ!");
       mqttClient.subscribe("tanque1/#");
       mqttClient.subscribe("tanque2/#");
+      mqttClient.subscribe("tanque1,+"); // Captura caso o formato venha com vírgula
     });
 
     mqttClient.on("message", async (topic, message) => {
-      // Força o tópico a ser String para evitar qualquer erro de tipo
-      const topicoString = String(topic);
-      
-      if (topicoString.includes("comando") || !collection) return;
+      const topicoStr = String(topic).toLowerCase();
+      if (topicoStr.includes("comando") || !collection) return;
 
       const valor = parseFloat(message.toString());
-      const partes = topicoString.split("/");
+      if (isNaN(valor)) return; // Ignora se não for número
 
-      if (partes.length >= 2 && !isNaN(valor)) {
-        // SUBSTITUTO DO TRIM: Transforma em string, remove todos os espaços e deixa minúsculo
-        const tanque = String(partes).replace(/\s+/g, '').toLowerCase();
-        const sensor = String(partes).replace(/\s+/g, '').toLowerCase();
+      // 🛡️ FILTRO ABSOLUTO: Procura a palavra exata, ignorando qualquer sujeira
+      let nomeTanque = "desconhecido";
+      if (topicoStr.includes("tanque1")) nomeTanque = "tanque1";
+      else if (topicoStr.includes("tanque2")) nomeTanque = "tanque2";
 
+      let nomeSensor = "desconhecido";
+      if (topicoStr.includes("temperatura_externa")) nomeSensor = "temperatura_externa";
+      else if (topicoStr.includes("umidade_ar")) nomeSensor = "umidade_ar";
+      else if (topicoStr.includes("nivel")) nomeSensor = "nivel";
+      else if (topicoStr.includes("luminosidade")) nomeSensor = "luminosidade";
+
+      // Só salva no banco se identificou com clareza quem é o tanque e o sensor
+      if (nomeTanque !== "desconhecido" && nomeSensor !== "desconhecido") {
         await collection.insertOne({
-          tanque: tanque,
-          sensor: sensor,
+          tanque: nomeTanque,
+          sensor: nomeSensor,
           valor: valor,
-          data: new Date(),
+          data: new Date()
         });
-        console.log(`💾 Sensor: [${tanque}] ${sensor} = ${valor}`);
+        console.log(`🎯 SINAL LIMPO -> Tanque: ${nomeTanque} | Sensor: ${nomeSensor} | Valor: ${valor}`);
       }
     });
 
     // ==========================================
-    // 3. ROTAS DA API (MONITORAMENTO E COMANDO)
+    // ROTAS DO APP
     // ==========================================
     
     app.get("/api/ping", (req, res) => res.send("Queen Carbon Online! 🚀"));
 
-    // MONITORAMENTO
+    // Rota de faxina
+    app.get("/api/limpar", async (req, res) => {
+      if (!collection) return res.send("Banco offline");
+      await collection.deleteMany({});
+      res.send("<h1>Banco Limpo! 🧹</h1>");
+    });
+
     app.get("/api/status/:tanque", async (req, res) => {
       try {
-        // SUBSTITUTO DO TRIM NAS ROTAS
-        const tanqueId = String(req.params.tanque).replace(/\s+/g, '').toLowerCase();
+        const tanqueId = req.params.tanque;
         const sensores = ['temperatura_externa', 'umidade_ar', 'nivel', 'luminosidade'];
         const resposta = {};
 
@@ -90,21 +99,14 @@ async function iniciarServidor() {
       }
     });
 
-    // CONTROLE (RELÉS)
     app.post("/api/comando/:tanque", (req, res) => {
       const { dispositivo, estado } = req.body;
-      const tanqueId = String(req.params.tanque).replace(/\s+/g, '').toLowerCase();
-      
-      const topico = `${tanqueId}/comando/${dispositivo}`;
+      const topico = `${req.params.tanque}/comando/${dispositivo}`;
       mqttClient.publish(topico, String(estado), { qos: 1 });
-      
-      console.log(`📤 Comando enviado: ${topico} -> ${estado}`);
-      res.json({ status: "sucesso", enviado: topico });
+      res.json({ status: "sucesso" });
     });
 
-    app.listen(PORT, () => {
-      console.log(`🚀 API Queen Carbon na porta ${PORT}`);
-    });
+    app.listen(PORT, () => console.log(`🚀 API Queen Carbon na porta ${PORT}`));
 
   } catch (error) {
     console.error("❌ Erro fatal:", error);
