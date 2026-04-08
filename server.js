@@ -32,7 +32,7 @@ async function iniciarServidor() {
       console.log("✅ Conectado ao HiveMQ!");
       mqttClient.subscribe("tanque1/#");
       mqttClient.subscribe("tanque2/#");
-      mqttClient.subscribe("tanque1,+"); // Captura caso o formato venha com vírgula
+      mqttClient.subscribe("tanque1,+");
     });
 
     mqttClient.on("message", async (topic, message) => {
@@ -40,9 +40,8 @@ async function iniciarServidor() {
       if (topicoStr.includes("comando") || !collection) return;
 
       const valor = parseFloat(message.toString());
-      if (isNaN(valor)) return; // Ignora se não for número
+      if (isNaN(valor)) return;
 
-      // 🛡️ FILTRO ABSOLUTO: Procura a palavra exata, ignorando qualquer sujeira
       let nomeTanque = "desconhecido";
       if (topicoStr.includes("tanque1")) nomeTanque = "tanque1";
       else if (topicoStr.includes("tanque2")) nomeTanque = "tanque2";
@@ -53,7 +52,6 @@ async function iniciarServidor() {
       else if (topicoStr.includes("nivel")) nomeSensor = "nivel";
       else if (topicoStr.includes("luminosidade")) nomeSensor = "luminosidade";
 
-      // Só salva no banco se identificou com clareza quem é o tanque e o sensor
       if (nomeTanque !== "desconhecido" && nomeSensor !== "desconhecido") {
         await collection.insertOne({
           tanque: nomeTanque,
@@ -66,24 +64,40 @@ async function iniciarServidor() {
     });
 
     // ==========================================
-    // ROTAS DO APP
+    // ROTAS DO APP (COM BLOQUEIO DE CACHE)
     // ==========================================
     
-    app.get("/api/ping", (req, res) => res.send("Queen Carbon Online! 🚀"));
+    // Função para proibir o navegador/VPN de salvar a página na memória
+    const noCache = (req, res, next) => {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.setHeader('Surrogate-Control', 'no-store');
+      next();
+    };
 
-    // Rota de faxina
-    app.get("/api/limpar", async (req, res) => {
+    app.get("/api/ping", noCache, (req, res) => res.send("Queen Carbon Online! 🚀"));
+
+    app.get("/api/limpar", noCache, async (req, res) => {
       if (!collection) return res.send("Banco offline");
       await collection.deleteMany({});
       res.send("<h1>Banco Limpo! 🧹</h1>");
     });
 
-    app.get("/api/status/:tanque", async (req, res) => {
+    // Voltei com a rota de DEBUG para você sempre poder ver o banco!
+    app.get("/api/debug/db", noCache, async (req, res) => {
+      if (!collection) return res.send("Banco não conectado");
+      const dados = await collection.find({}).sort({ data: -1 }).limit(10).toArray();
+      res.json(dados);
+    });
+
+    app.get("/api/status/:tanque", noCache, async (req, res) => {
       try {
         const tanqueId = req.params.tanque;
         const sensores = ['temperatura_externa', 'umidade_ar', 'nivel', 'luminosidade'];
         const resposta = {};
 
+        // Se o banco estiver vazio, ele VAI devolver zeros, nunca {} vazio.
         for (let s of sensores) {
           const ultimoDado = await collection
             .find({ tanque: tanqueId, sensor: s })
