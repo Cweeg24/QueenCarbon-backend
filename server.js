@@ -63,7 +63,7 @@ async function iniciarServidor() {
     });
 
     // ==========================================
-    // ROTAS DO APP (COM BLOQUEIO DE CACHE)
+    // ROTAS DO APP
     // ==========================================
     
     const noCache = (req, res, next) => {
@@ -84,27 +84,28 @@ async function iniciarServidor() {
 
     app.get("/api/debug/db", noCache, async (req, res) => {
       if (!collection) return res.send("Banco não conectado");
-      const dados = await collection.find({}).sort({ data: -1 }).limit(10).toArray();
+      const dados = await collection.find({}).sort({ _id: -1 }).limit(10).toArray();
       res.json(dados);
     });
 
-    // 🛡️ A ROTA REESCRITA E INFALÍVEL
+    // 🛡️ A ROTA BLINDADA CONTRA FANTASMAS
     app.get("/api/status/:tanque", noCache, async (req, res) => {
       try {
-        const t = req.params.tanque;
+        const t = String(req.params.tanque).trim().toLowerCase();
         
-        // Buscas diretas. É impossível isso retornar vazio se o código estiver rodando.
-        const temp = await collection.find({ tanque: t, sensor: "temperatura_externa" }).sort({ data: -1 }).limit(1).toArray();
-        const umi = await collection.find({ tanque: t, sensor: "umidade_ar" }).sort({ data: -1 }).limit(1).toArray();
-        const niv = await collection.find({ tanque: t, sensor: "nivel" }).sort({ data: -1 }).limit(1).toArray();
-        const lum = await collection.find({ tanque: t, sensor: "luminosidade" }).sort({ data: -1 }).limit(1).toArray();
+        // MUDANÇA CRÍTICA: Ordenando por _id -1 (Timestamp puro do Mongo)
+        const temp = await collection.find({ tanque: t, sensor: "temperatura_externa" }).sort({ _id: -1 }).limit(1).toArray();
+        const umi = await collection.find({ tanque: t, sensor: "umidade_ar" }).sort({ _id: -1 }).limit(1).toArray();
+        const niv = await collection.find({ tanque: t, sensor: "nivel" }).sort({ _id: -1 }).limit(1).toArray();
+        const lum = await collection.find({ tanque: t, sensor: "luminosidade" }).sort({ _id: -1 }).limit(1).toArray();
 
+        // MUDANÇA CRÍTICA: Operador ?? garante que NUNCA seja undefined
         res.json({
-          temperatura_externa: temp.length > 0 ? temp.valor : 0,
-          umidade_ar: umi.length > 0 ? umi.valor : 0,
-          nivel: niv.length > 0 ? niv.valor : 0,
-          luminosidade: lum.length > 0 ? lum.valor : 0,
-          status_servidor: "OK_ATUALIZADO" // <-- SINAL RASTREADOR
+          temperatura_externa: temp?.valor ?? 0,
+          umidade_ar: umi?.valor ?? 0,
+          nivel: niv?.valor ?? 0,
+          luminosidade: lum?.valor ?? 0,
+          status_servidor: "OK_BLINDADO"
         });
       } catch (e) {
         res.status(500).json({ erro: "Erro", detalhe: e.message });
