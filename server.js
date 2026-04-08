@@ -9,10 +9,6 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-
-// ==========================================
-// 1. CONFIGURAÇÃO DO MONGODB
-// ==========================================
 const mongoClient = new MongoClient(process.env.MONGO_URI);
 let collection;
 
@@ -42,21 +38,23 @@ async function iniciarServidor() {
     });
 
     mqttClient.on("message", async (topic, message) => {
-      // Ignora se for tópico de comando
-      if (topic.includes("comando") || !collection) return;
+      // Força o tópico a ser String para evitar qualquer erro de tipo
+      const topicoString = String(topic);
+      
+      if (topicoString.includes("comando") || !collection) return;
 
       const valor = parseFloat(message.toString());
-      const partes = topic.split("/");
+      const partes = topicoString.split("/");
 
       if (partes.length >= 2 && !isNaN(valor)) {
-        // Limpando os nomes para evitar o erro do {}
-        const tanque = partes.trim().toLowerCase();
-        const sensor = partes.trim().toLowerCase();
+        // SUBSTITUTO DO TRIM: Transforma em string, remove todos os espaços e deixa minúsculo
+        const tanque = String(partes).replace(/\s+/g, '').toLowerCase();
+        const sensor = String(partes).replace(/\s+/g, '').toLowerCase();
 
         await collection.insertOne({
-          tanque,
-          sensor,
-          valor,
+          tanque: tanque,
+          sensor: sensor,
+          valor: valor,
           data: new Date(),
         });
         console.log(`💾 Sensor: [${tanque}] ${sensor} = ${valor}`);
@@ -67,13 +65,13 @@ async function iniciarServidor() {
     // 3. ROTAS DA API (MONITORAMENTO E COMANDO)
     // ==========================================
     
-    // ROTA DE TESTE (Para ver se o servidor está vivo)
     app.get("/api/ping", (req, res) => res.send("Queen Carbon Online! 🚀"));
 
-    // MONITORAMENTO: Pega o último valor de cada sensor
+    // MONITORAMENTO
     app.get("/api/status/:tanque", async (req, res) => {
       try {
-        const tanqueId = req.params.tanque.toLowerCase().trim();
+        // SUBSTITUTO DO TRIM NAS ROTAS
+        const tanqueId = String(req.params.tanque).replace(/\s+/g, '').toLowerCase();
         const sensores = ['temperatura_externa', 'umidade_ar', 'nivel', 'luminosidade'];
         const resposta = {};
 
@@ -92,10 +90,10 @@ async function iniciarServidor() {
       }
     });
 
-    // CONTROLE: Envia comandos para os relés via MQTT
+    // CONTROLE (RELÉS)
     app.post("/api/comando/:tanque", (req, res) => {
-      const { dispositivo, estado } = req.body; // estado vem como "1" ou "0"
-      const tanqueId = req.params.tanque.toLowerCase().trim();
+      const { dispositivo, estado } = req.body;
+      const tanqueId = String(req.params.tanque).replace(/\s+/g, '').toLowerCase();
       
       const topico = `${tanqueId}/comando/${dispositivo}`;
       mqttClient.publish(topico, String(estado), { qos: 1 });
