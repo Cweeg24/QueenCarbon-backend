@@ -88,24 +88,29 @@ async function iniciarServidor() {
       res.json(dados);
     });
 
-    // 🛡️ A ROTA BLINDADA CONTRA FANTASMAS
+    // 🛡️ A ROTA DEFINITIVA COM RAIO-X
     app.get("/api/status/:tanque", noCache, async (req, res) => {
       try {
-        const t = String(req.params.tanque).trim().toLowerCase();
+        // FILTRO DESTRUIDOR: Remove qualquer coisa que não seja letra ou número da URL
+        const t = String(req.params.tanque).replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
         
-        // MUDANÇA CRÍTICA: Ordenando por _id -1 (Timestamp puro do Mongo)
-        const temp = await collection.find({ tanque: t, sensor: "temperatura_externa" }).sort({ _id: -1 }).limit(1).toArray();
-        const umi = await collection.find({ tanque: t, sensor: "umidade_ar" }).sort({ _id: -1 }).limit(1).toArray();
-        const niv = await collection.find({ tanque: t, sensor: "nivel" }).sort({ _id: -1 }).limit(1).toArray();
-        const lum = await collection.find({ tanque: t, sensor: "luminosidade" }).sort({ _id: -1 }).limit(1).toArray();
+        console.log(`[API] Navegador pediu os dados do tanque: '${t}'`);
 
-        // MUDANÇA CRÍTICA: Operador ?? garante que NUNCA seja undefined
+        // Busca DIRETA do objeto usando findOne (muito mais seguro)
+        const temp = await collection.findOne({ tanque: t, sensor: "temperatura_externa" }, { sort: { _id: -1 } });
+        const umi = await collection.findOne({ tanque: t, sensor: "umidade_ar" }, { sort: { _id: -1 } });
+        const niv = await collection.findOne({ tanque: t, sensor: "nivel" }, { sort: { _id: -1 } });
+        const lum = await collection.findOne({ tanque: t, sensor: "luminosidade" }, { sort: { _id: -1 } });
+
+        console.log(`[API] Banco achou -> Temp: ${temp ? temp.valor : 'NADA'}`);
+
         res.json({
-          temperatura_externa: temp?.valor ?? 0,
-          umidade_ar: umi?.valor ?? 0,
-          nivel: niv?.valor ?? 0,
-          luminosidade: lum?.valor ?? 0,
-          status_servidor: "OK_BLINDADO"
+          temperatura_externa: temp ? temp.valor : 0,
+          umidade_ar: umi ? umi.valor : 0,
+          nivel: niv ? niv.valor : 0,
+          luminosidade: lum ? lum.valor : 0,
+          status_servidor: "OK_RAIO_X",
+          tanque_buscado: t // Isso vai mostrar na sua tela o que a URL realmente leu
         });
       } catch (e) {
         res.status(500).json({ erro: "Erro", detalhe: e.message });
