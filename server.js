@@ -117,6 +117,52 @@ async function iniciarServidor() {
       }
     });
 
+    // 📊 ROTA DE HISTÓRICO (Com proteção contra travamento)
+    app.get("/api/historico/:tanque", noCache, async (req, res) => {
+      try {
+        const t = String(req.params.tanque).replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+        const sensorReq = String(req.query.sensor);
+        const periodo = String(req.query.periodo); // "1h", "24h" ou "7d"
+
+        if (!sensorReq) return res.status(400).json({ erro: "Sensor não informado" });
+
+        console.log(`[API Histórico] Tanque: ${t} | Sensor: ${sensorReq} | Período: ${periodo}`);
+
+        // 1. Calcula a data de corte (A Máquina do Tempo)
+        const dataCorte = new Date();
+        if (periodo === "1h") dataCorte.setHours(dataCorte.getHours() - 1);
+        else if (periodo === "7d") dataCorte.setDate(dataCorte.getDate() - 7);
+        else dataCorte.setHours(dataCorte.getHours() - 24); // Padrão é 24h
+
+        // 2. Busca no MongoDB tudo que for mais novo que a data de corte ($gte)
+        const historico = await collection.find({
+          tanque: t,
+          sensor: sensorReq,
+          data: { $gte: dataCorte }
+        })
+        .sort({ data: 1 }) // Ordem Crescente (do antigo pro novo) para o gráfico desenhar certo
+        .toArray();
+
+        let dadosFormatados = historico.map(d => ({
+          timestamp: d.data,
+          valor: d.valor
+        }));
+
+        // 3. INTELIGÊNCIA INDUSTRIAL (Downsampling)
+        // Se a ESP32 manda 1 dado a cada 5s, em 24h teremos 17.000 pontos. O celular explode.
+        // Se tiver mais de 15 pontos, pegamos amostras espaçadas.
+        const maxPontos = 15;
+        if (dadosFormatados.length > maxPontos) {
+          const passo = Math.ceil(dadosFormatados.length / maxPontos);
+          dadosFormatados = dadosFormatados.filter((_, index) => index % passo === 0);
+        }
+
+        res.json(dadosFormatados);
+      } catch (e) {
+        res.status(500).json({ erro: "Erro no servidor", detalhe: e.message });
+      }
+    });
+
     app.post("/api/comando/:tanque", (req, res) => {
       const { dispositivo, estado } = req.body;
       const topico = `${req.params.tanque}/comando/${dispositivo}`;
