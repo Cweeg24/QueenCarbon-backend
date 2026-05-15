@@ -34,6 +34,9 @@ async function iniciarServidor() {
       mqttClient.subscribe("tanque2/#");
     });
 
+    // ==========================================
+    // RECEBIMENTO DE DADOS DA ESP32
+    // ==========================================
     mqttClient.on("message", async (topic, message) => {
       const topicoStr = String(topic).toLowerCase();
       if (topicoStr.includes("comando") || !collection) return;
@@ -45,11 +48,14 @@ async function iniciarServidor() {
       if (topicoStr.includes("tanque1")) nomeTanque = "tanque1";
       else if (topicoStr.includes("tanque2")) nomeTanque = "tanque2";
 
+      // ⚠️ ATUALIZADO: Reconhecendo os novos sensores
       let nomeSensor = "desconhecido";
       if (topicoStr.includes("temperatura_externa")) nomeSensor = "temperatura_externa";
       else if (topicoStr.includes("umidade_ar")) nomeSensor = "umidade_ar";
       else if (topicoStr.includes("nivel")) nomeSensor = "nivel";
       else if (topicoStr.includes("luminosidade")) nomeSensor = "luminosidade";
+      else if (topicoStr.includes("temperatura_agua")) nomeSensor = "temperatura_agua"; // NOVO: DS18B20
+      else if (topicoStr.includes("gas_mq7")) nomeSensor = "gas_mq7"; // NOVO: MQ-7
 
       if (nomeTanque !== "desconhecido" && nomeSensor !== "desconhecido") {
         await collection.insertOne({
@@ -88,36 +94,39 @@ async function iniciarServidor() {
       res.json(dados);
     });
 
-    // 🛡️ A ROTA DEFINITIVA COM RAIO-X
+    // 🛡️ A ROTA DEFINITIVA COM RAIO-X (ATUALIZADA)
     app.get("/api/status/:tanque", noCache, async (req, res) => {
       try {
-        // FILTRO DESTRUIDOR: Remove qualquer coisa que não seja letra ou número da URL
         const t = String(req.params.tanque).replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
         
         console.log(`[API] Navegador pediu os dados do tanque: '${t}'`);
 
-        // Busca DIRETA do objeto usando findOne (muito mais seguro)
+        // Busca de todos os sensores
         const temp = await collection.findOne({ tanque: t, sensor: "temperatura_externa" }, { sort: { _id: -1 } });
         const umi = await collection.findOne({ tanque: t, sensor: "umidade_ar" }, { sort: { _id: -1 } });
         const niv = await collection.findOne({ tanque: t, sensor: "nivel" }, { sort: { _id: -1 } });
         const lum = await collection.findOne({ tanque: t, sensor: "luminosidade" }, { sort: { _id: -1 } });
+        const tempAgua = await collection.findOne({ tanque: t, sensor: "temperatura_agua" }, { sort: { _id: -1 } }); // NOVO
+        const gas = await collection.findOne({ tanque: t, sensor: "gas_mq7" }, { sort: { _id: -1 } }); // NOVO
 
-        console.log(`[API] Banco achou -> Temp: ${temp ? temp.valor : 'NADA'}`);
+        console.log(`[API] Banco achou -> Temp Ar: ${temp ? temp.valor : 'NADA'} | Temp Água: ${tempAgua ? tempAgua.valor : 'NADA'}`);
 
         res.json({
           temperatura_externa: temp ? temp.valor : 0,
           umidade_ar: umi ? umi.valor : 0,
           nivel: niv ? niv.valor : 0,
           luminosidade: lum ? lum.valor : 0,
+          temperatura_agua: tempAgua ? tempAgua.valor : 0, // NOVO: Manda para o App
+          gas_mq7: gas ? gas.valor : 0, // NOVO: Manda para o App
           status_servidor: "OK_RAIO_X",
-          tanque_buscado: t // Isso vai mostrar na sua tela o que a URL realmente leu
+          tanque_buscado: t 
         });
       } catch (e) {
         res.status(500).json({ erro: "Erro", detalhe: e.message });
       }
     });
 
-    // 📊 ROTA DE HISTÓRICO (Com proteção contra travamento)
+    // 📊 ROTA DE HISTÓRICO 
     app.get("/api/historico/:tanque", noCache, async (req, res) => {
       try {
         const t = String(req.params.tanque).replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
@@ -128,19 +137,17 @@ async function iniciarServidor() {
 
         console.log(`[API Histórico] Tanque: ${t} | Sensor: ${sensorReq} | Período: ${periodo}`);
 
-        // 1. Calcula a data de corte (A Máquina do Tempo)
         const dataCorte = new Date();
         if (periodo === "1h") dataCorte.setHours(dataCorte.getHours() - 1);
         else if (periodo === "7d") dataCorte.setDate(dataCorte.getDate() - 7);
-        else dataCorte.setHours(dataCorte.getHours() - 24); // Padrão é 24h
+        else dataCorte.setHours(dataCorte.getHours() - 24); 
 
-        // 2. Busca no MongoDB tudo que for mais novo que a data de corte ($gte)
         const historico = await collection.find({
           tanque: t,
           sensor: sensorReq,
           data: { $gte: dataCorte }
         })
-        .sort({ data: 1 }) // Ordem Crescente (do antigo pro novo) para o gráfico desenhar certo
+        .sort({ data: 1 }) 
         .toArray();
 
         let dadosFormatados = historico.map(d => ({
@@ -148,9 +155,6 @@ async function iniciarServidor() {
           valor: d.valor
         }));
 
-        // 3. INTELIGÊNCIA INDUSTRIAL (Downsampling)
-        // Se a ESP32 manda 1 dado a cada 5s, em 24h teremos 17.000 pontos. O celular explode.
-        // Se tiver mais de 15 pontos, pegamos amostras espaçadas.
         const maxPontos = 15;
         if (dadosFormatados.length > maxPontos) {
           const passo = Math.ceil(dadosFormatados.length / maxPontos);
@@ -163,14 +167,15 @@ async function iniciarServidor() {
       }
     });
 
+    // 🕹️ ROTA DE COMANDO (RECEBE DO APP E MANDA PARA A ESP32)
     app.post("/api/comando/:tanque", (req, res) => {
       const { dispositivo, estado } = req.body;
-      const topico = `${req.params.tanque}/comando/${dispositivo}`;
+      const topico = `${req.params.tanque}/comando/${dispositivo}`; // Se vier "bomba", vira "tanque1/comando/bomba"
       mqttClient.publish(topico, String(estado), { qos: 1 });
-      res.json({ status: "sucesso" });
+      res.json({ status: "sucesso", detalhe: `Comando enviado para ${topico}` });
     });
 
-    app.listen(PORT, () => console.log(`🚀 API Queen Carbon na porta ${PORT}`));
+    app.listen(PORT, () => console.log(`🚀 API Queen Carbon rodando na porta ${PORT}`));
 
   } catch (error) {
     console.error("❌ Erro fatal:", error);
